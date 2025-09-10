@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+motor
+python-dotenv
+psycopg2-binary
+SQLAlchemy
+alembic
+pydantic
