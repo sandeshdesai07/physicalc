@@ -6,3 +6,15 @@ Switch Node to LTS (v20) using nvm-windows (recommended). Current v22 may break 
 Install Python 3.11 (or 3.10) and use it for the project — many ML, DB drivers (psycopg2, some wheels) and ecosystem tools are officially supported on 3.10/3.11; 3.13 is very new and may cause installation errors.
 
 Create a virtual environment for the project and use that Python. Keep 3.13 on the system if you prefer, but use 3.11 inside the project.
+-----------------------------------------------
+from following point matter is remain
+
+6 — Deploying to a cloud cluster (economical choices)
+
+Local dev: kind or minikube (FREE, recommended for development).
+
+Small cloud K8s: Google GKE, AWS EKS, Azure AKS all have free tiers or small node types; costs depend on nodes. For minimal cost, run 1 small node (e2-micro) — but check provider pricing.
+
+Alternative (simpler): Use a managed app platform (Render, Fly, Railway) — but you said Kubernetes is required, so keep K8s manifests and use kind for local K8s or create a small GKE cluster when ready.
+
+If you want, I can produce a short estimated-cost plan for a tiny GKE cluster (1 small node) — tell me and I’ll estimate typical monthly costs (but note provider pricing may change).
