@@ -1,1 +1,8 @@
 \\wsl.localhost\Ubuntu\home\sandesh\projects\physicalc
+git version 2.51.0.windows.1 — ✅ Good
+docker --version → Docker version 28.3.3
+Switch Node to LTS (v20) using nvm-windows (recommended). Current v22 may break some packages or CI expectations.
+
+Install Python 3.11 (or 3.10) and use it for the project — many ML, DB drivers (psycopg2, some wheels) and ecosystem tools are officially supported on 3.10/3.11; 3.13 is very new and may cause installation errors.
+
+Create a virtual environment for the project and use that Python. Keep 3.13 on the system if you prefer, but use 3.11 inside the project.
