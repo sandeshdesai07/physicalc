@@ -2,12 +2,15 @@
 import os
 import re
 import ast
+import asyncio
 from datetime import datetime
+from urllib.parse import quote_plus
+from typing import Optional, Dict, Any
 
+import requests
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-
 from motor.motor_asyncio import AsyncIOMotorClient
 from sqlalchemy import create_engine, text
 
@@ -18,7 +21,7 @@ from app.utils.parser import extract_vars
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # during testing; replace with specific origins in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -41,6 +44,83 @@ pg_engine = create_engine(POSTGRES_URI, echo=False, future=True)
 class AskIn(BaseModel):
     user_id: int = 0
     text: str
+
+# ----- Helpers -----
+def _tokenize_and_ngrams(text: str):
+    # keep only letters and spaces, lowercase
+    toks = [t for t in re.findall(r"[a-zA-Z]+", text.lower()) if len(t) > 1]
+    ngrams = []
+    for n in (3, 2, 1):
+        for i in range(max(0, len(toks) - n + 1)):
+            ngrams.append(" ".join(toks[i : i + n]))
+    # dedupe preserve order
+    seen = set()
+    out = []
+    for g in ngrams:
+        if g not in seen:
+            seen.add(g)
+            out.append(g)
+    return out
+
+def _pg_lookup_sync(search_text: str) -> Optional[Dict[str, Any]]:
+    """
+    Synchronous Postgres lookup. Intended to run in a thread via asyncio.to_thread.
+    Tries whole phrase first, then n-grams.
+    """
+    try:
+        with pg_engine.connect() as conn:
+            if search_text:
+                q = text(
+                    "SELECT id, name, expression, units, description FROM formulas "
+                    "WHERE name ILIKE :q OR description ILIKE :q LIMIT 1"
+                )
+                res = conn.execute(q, {"q": f"%{search_text}%"}).fetchone()
+                if res:
+                    return {"id": res[0], "name": res[1], "expression": res[2], "units": res[3], "description": res[4]}
+
+            # fallback via ngrams
+            ngrams = _tokenize_and_ngrams(search_text)
+            for g in ngrams:
+                q2 = text(
+                    "SELECT id, name, expression, units, description FROM formulas "
+                    "WHERE name ILIKE :q OR description ILIKE :q LIMIT 1"
+                )
+                res2 = conn.execute(q2, {"q": f"%{g}%"}).fetchone()
+                if res2:
+                    return {"id": res2[0], "name": res2[1], "expression": res2[2], "units": res2[3], "description": res2[4]}
+    except Exception as e:
+        print("Postgres lookup error:", e)
+    return None
+
+def _crossref_lookup_sync(query: str, rows: int = 3) -> Optional[Dict[str, str]]:
+    """
+    Synchronous CrossRef lookup (safe to run in a thread). Returns dict with title, doi, url.
+    """
+    try:
+        if not query:
+            return None
+        safe_q = quote_plus(query)
+        url = f"https://api.crossref.org/works?query.title={safe_q}&rows={rows}"
+        r = requests.get(url, timeout=6)
+        if r.status_code != 200:
+            url2 = f"https://api.crossref.org/works?query={safe_q}&rows={rows}"
+            r = requests.get(url2, timeout=6)
+            if r.status_code != 200:
+                return None
+        data = r.json().get("message", {}).get("items", [])
+        if not data:
+            return None
+        it = data[0]
+        title = " ".join(it.get("title", [])) if it.get("title") else None
+        doi = it.get("DOI")
+        link = it.get("URL") or (f"https://doi.org/{doi}" if doi else None)
+        return {"title": title, "doi": doi, "url": link}
+    except Exception as e:
+        print("CrossRef lookup error:", e)
+        return None
+
+async def crossref_lookup(query: str) -> Optional[Dict[str, str]]:
+    return await asyncio.to_thread(_crossref_lookup_sync, query)
 
 # ----- Health -----
 @app.get("/health")
@@ -66,53 +146,20 @@ async def ask(payload: AskIn):
     }
 
     # Parse variables
-    vars_found = extract_vars(payload.text)
+    vars_found = extract_vars(payload.text or "")
     doc["parsed"] = vars_found
 
-    # ---------- Lookup (token-by-token) ----------
-    match = None
+    # Prepare cleaned search text (strip numbers/units to focus on keywords)
     raw = (payload.text or "").lower()
-
-    # remove numbers and common units to keep keywords
     clean = re.sub(r'[-+]?\d*\.?\d+\s*(kg|kilograms|m/s|m s-1|m s\^-1|m|s|meters|meter|seconds|sec)\b', ' ', raw)
     clean = re.sub(r'[^a-z\s]', ' ', clean)
     clean = re.sub(r'\s+', ' ', clean).strip()
-
     search_text = clean if clean else raw
-    #print("DEBUG search_text:", repr(search_text))
 
-    tokens = [t for t in search_text.split() if len(t) > 2]
-    if not tokens:
-        tokens = [t for t in raw.split() if len(t) > 2]
+    # Run Postgres lookup in a thread (non-blocking)
+    match = await asyncio.to_thread(_pg_lookup_sync, search_text)
 
-    try:
-        with pg_engine.connect() as conn:
-            # Try whole cleaned phrase first
-            if search_text:
-                q = text(
-                    "SELECT id, name, expression, units, description FROM formulas "
-                    "WHERE name ILIKE :q OR description ILIKE :q LIMIT 1"
-                )
-                res = conn.execute(q, {"q": f"%{search_text}%"}).fetchone()
-                if res:
-                    match = {"id": res[0], "name": res[1], "expression": res[2], "units": res[3], "description": res[4]}
-                    print("DEBUG matched phrase:", match["name"])
-            # If not found, try tokens one-by-one
-            if not match and tokens:
-                for tok in tokens:
-                    q = text(
-                        "SELECT id, name, expression, units, description FROM formulas "
-                        "WHERE name ILIKE :tok OR description ILIKE :tok LIMIT 1"
-                    )
-                    res = conn.execute(q, {"tok": f"%{tok}%"}).fetchone()
-                    if res:
-                        match = {"id": res[0], "name": res[1], "expression": res[2], "units": res[3], "description": res[4]}
-                        print("DEBUG matched token:", tok, "->", match["name"])
-                        break
-    except Exception as e:
-        print("Postgres lookup error:", e)
-
-    # ---------- Compute / result ----------
+    # Compute/answer
     answer = None
     source = None
 
@@ -123,12 +170,16 @@ async def ask(payload: AskIn):
             varnames = {n.id for n in ast.walk(parsed_ast) if isinstance(n, ast.Name)}
 
             if varnames and varnames.issubset(set(vars_found.keys())):
-                val = safe_eval(expr, vars_found)
+                # evaluate in a thread-safe way
+                val = await asyncio.to_thread(safe_eval, expr, vars_found)
                 answer = float(val)
+                # try CrossRef to attach a source (in background)
+                src = await crossref_lookup(match.get("name") or match.get("description") or "")
                 source = {
-                    "title": match.get("name"),
+                    "title": src.get("title") if src else match.get("name"),
                     "description": match.get("description"),
-                    "url": None,
+                    "url": src.get("url") if src else None,
+                    "doi": src.get("doi") if src else None,
                     "formula_id": int(match.get("id"))
                 }
             else:
