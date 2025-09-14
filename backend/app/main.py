@@ -21,7 +21,7 @@ from app.utils.parser import extract_vars
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # during testing; replace with specific origins in production
+    allow_origins=["https://your-vercel-domain.vercel.app", "http://localhost:3000"],  # during testing; replace with specific origins in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
