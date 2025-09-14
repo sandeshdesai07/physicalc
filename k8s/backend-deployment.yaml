@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: physicalc-backend
+  labels:
+    app: physicalc-backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: physicalc-backend
+  template:
+    metadata:
+      labels:
+        app: physicalc-backend
+    spec:
+      containers:
+        - name: backend
+          image: asia-south1-docker.pkg.dev/adroit-resolver-414008/physicalc-repo/backend:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+          env:
+            - name: MONGO_URI
+              value: "mongodb://mongo-mongodb.default.svc.cluster.local:27017"
+            - name: DATABASE_URL
+              value: "postgresql://postgres:physic_pass@pg-postgresql.default.svc.cluster.local:5432/postgres"
+            - name: PORT
+              value: "8000"
