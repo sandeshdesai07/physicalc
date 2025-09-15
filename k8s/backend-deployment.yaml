@@ -21,9 +21,19 @@ spec:
           ports:
             - containerPort: 8000
           env:
+            # Mongo URI from secret
             - name: MONGO_URI
-              value: "mongodb://mongo-mongodb.default.svc.cluster.local:27017"
+              valueFrom:
+                secretKeyRef:
+                  name: mongo-physicalc-conn
+                  key: mongo_uri
+
+            # Postgres connection (can also be moved to a secret later)
             - name: DATABASE_URL
-              value: "postgresql://postgres:physic_pass@pg-postgresql.default.svc.cluster.local:5432/postgres"
+              valueFrom:
+                secretKeyRef:
+                  name: pg-physicalc-conn
+                  key: database_url
+
             - name: PORT
               value: "8000"
