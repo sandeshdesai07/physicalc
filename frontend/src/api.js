@@ -1,5 +1,5 @@
 // src/api.js
-// centralised API helper — avoids embedding absolute backend IP in production builds
+// centralized API helper — avoids embedding absolute backend IP in production builds
 
 const DEFAULT_LOCAL = 'http://localhost:8000';
 

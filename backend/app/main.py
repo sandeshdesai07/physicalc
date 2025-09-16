@@ -19,9 +19,17 @@ from app.utils.parser import extract_vars
 
 # ----- App init -----
 app = FastAPI()
+
+# NOTE: Replace "https://physicalc.vercel.app" below with your actual frontend domain
+# if different. Keep localhost for local dev.
+FRONTEND_ORIGINS = [
+    "https://physicalc.vercel.app",
+    "http://localhost:3000",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://your-vercel-domain.vercel.app", "http://localhost:3000"],  # during testing; replace with specific origins in production
+    allow_origins=FRONTEND_ORIGINS,  # restrict to your frontend origins in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -47,13 +55,11 @@ class AskIn(BaseModel):
 
 # ----- Helpers -----
 def _tokenize_and_ngrams(text: str):
-    # keep only letters and spaces, lowercase
     toks = [t for t in re.findall(r"[a-zA-Z]+", text.lower()) if len(t) > 1]
     ngrams = []
     for n in (3, 2, 1):
         for i in range(max(0, len(toks) - n + 1)):
             ngrams.append(" ".join(toks[i : i + n]))
-    # dedupe preserve order
     seen = set()
     out = []
     for g in ngrams:
@@ -63,10 +69,6 @@ def _tokenize_and_ngrams(text: str):
     return out
 
 def _pg_lookup_sync(search_text: str) -> Optional[Dict[str, Any]]:
-    """
-    Synchronous Postgres lookup. Intended to run in a thread via asyncio.to_thread.
-    Tries whole phrase first, then n-grams.
-    """
     try:
         with pg_engine.connect() as conn:
             if search_text:
@@ -78,7 +80,6 @@ def _pg_lookup_sync(search_text: str) -> Optional[Dict[str, Any]]:
                 if res:
                     return {"id": res[0], "name": res[1], "expression": res[2], "units": res[3], "description": res[4]}
 
-            # fallback via ngrams
             ngrams = _tokenize_and_ngrams(search_text)
             for g in ngrams:
                 q2 = text(
@@ -93,9 +94,6 @@ def _pg_lookup_sync(search_text: str) -> Optional[Dict[str, Any]]:
     return None
 
 def _crossref_lookup_sync(query: str, rows: int = 3) -> Optional[Dict[str, str]]:
-    """
-    Synchronous CrossRef lookup (safe to run in a thread). Returns dict with title, doi, url.
-    """
     try:
         if not query:
             return None
@@ -135,7 +133,6 @@ def health():
 # ----- Ask handler -----
 @app.post("/api/ask")
 async def ask(payload: AskIn):
-    # Base doc
     doc = {
         "user_id": payload.user_id,
         "text": payload.text,
@@ -145,21 +142,17 @@ async def ask(payload: AskIn):
         "timestamp": datetime.utcnow()
     }
 
-    # Parse variables
     vars_found = extract_vars(payload.text or "")
     doc["parsed"] = vars_found
 
-    # Prepare cleaned search text (strip numbers/units to focus on keywords)
     raw = (payload.text or "").lower()
     clean = re.sub(r'[-+]?\d*\.?\d+\s*(kg|kilograms|m/s|m s-1|m s\^-1|m|s|meters|meter|seconds|sec)\b', ' ', raw)
     clean = re.sub(r'[^a-z\s]', ' ', clean)
     clean = re.sub(r'\s+', ' ', clean).strip()
     search_text = clean if clean else raw
 
-    # Run Postgres lookup in a thread (non-blocking)
     match = await asyncio.to_thread(_pg_lookup_sync, search_text)
 
-    # Compute/answer
     answer = None
     source = None
 
@@ -170,10 +163,8 @@ async def ask(payload: AskIn):
             varnames = {n.id for n in ast.walk(parsed_ast) if isinstance(n, ast.Name)}
 
             if varnames and varnames.issubset(set(vars_found.keys())):
-                # evaluate in a thread-safe way
                 val = await asyncio.to_thread(safe_eval, expr, vars_found)
                 answer = float(val)
-                # try CrossRef to attach a source (in background)
                 src = await crossref_lookup(match.get("name") or match.get("description") or "")
                 source = {
                     "title": src.get("title") if src else match.get("name"),
@@ -190,7 +181,6 @@ async def ask(payload: AskIn):
     else:
         answer = "no_formula_found"
 
-    # store and return
     doc["answer"] = answer if not isinstance(answer, float) else {"value": answer}
     doc["source"] = source
 

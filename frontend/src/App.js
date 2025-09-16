@@ -1,7 +1,6 @@
-// frontend/src/App.js
+// src/App.js
 import React, { useState } from "react";
-
-const API_BASE = process.env.REACT_APP_API_BASE_URL || "http://34.100.131.244:8000";
+import { askQuestion } from "./api";   // <- use centralised API helper
 
 function App() {
   const [text, setText] = useState("");
@@ -14,16 +13,7 @@ function App() {
     setError(null);
     setResp(null);
     try {
-      const r = await fetch(`${API_BASE}/api/ask`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: 1, text })
-      });
-      if (!r.ok) {
-        const txt = await r.text();
-        throw new Error(`HTTP ${r.status}: ${txt}`);
-      }
-      const j = await r.json();
+      const j = await askQuestion(1, text);   // call helper (works in dev & prod)
       setResp(j);
     } catch (e) {
       setError(String(e));
